@@ -91,17 +91,14 @@ contract merkleTreeNFT is IzkuNFT {
     bytes32[] merkleLeaves;
     // array index of merkle root
     uint256 merkleRootIndex = 0;
+    uint256 powerOfTwo = 1;
 
     // depth of tree, counting from 0
     uint256 treeDepth = 0;
-    uint256 depth = 0;
 
     // position in base array, also the transaction count
     uint256 offset = 0;
     uint256 transactionCount = 0;
-
-    uint256 currPowerOfTwo = 1;
-    uint256 nextPowerOfTwo = 2;
 
     // store location of NFT smart contract, initialised to zero address
     address public zkuNFTAddress = address(0);
@@ -112,13 +109,15 @@ contract merkleTreeNFT is IzkuNFT {
      * tree size is enforced to be a power of two on contract creation 
      */
     constructor(uint256 treeHeight) {
-        require(treeHeight < 10 && treeHeight > 0);
+        require(treeHeight < 10 && treeHeight > 1);
         zkuNFTAddress = address(new zkuNFT());
         merkleLeaves = new bytes32[](2**treeHeight - 1);
         for(uint i = 0; i < 2**treeHeight - 1; i++) {
             merkleLeaves[i] = 0x0000000000000000000000000000000000000000000000000000000000000000;
         }
+        // disregard row 0
         treeDepth = treeHeight - 1;
+        merkleRootIndex = 2**treeHeight - 1;
     }
 
     /*
@@ -160,49 +159,34 @@ contract merkleTreeNFT is IzkuNFT {
     function merkleAddNFT(bytes32 metadata)
         private
     {
-        // dont overfill tree
-        require(transactionCount < 2**treeDepth - 1);
-
-        // each new nft increases offset of base array by one
-        offset = transactionCount;
         transactionCount++;
-
+        calculateNewRootIndex();
 
         // handle base case, single element add to array
         if(transactionCount == 1){
-            currPowerOfTwo = 0;
             merkleRootIndex = 2**treeDepth - 1;
             merkleLeaves[2**treeDepth - 1 + offset] = metadata;
         }
 
         // handle simple two element merkle tree
-        if(transactionCount == 2) {
-            currPowerOfTwo = 1;
-            depth = 1;
+        else if(transactionCount == 2) {
             merkleRootIndex = 2**(treeDepth - 1) - 1;
             merkleLeaves[2**treeDepth - 1 + offset] = metadata;
-            uint256 parent = (2**treeDepth - 1 + offset) / 2; 
-            merkleLeaves[parent] = hash(merkleLeaves[2 * parent + 1], merkleLeaves[2 * parent + 2]);
+            uint256 parent = ((2**treeDepth - 1 + offset) - 1) / 2;
+            bytes32 childLeft = merkleLeaves[2 * parent + 1];
+            bytes32 childRight = merkleLeaves[2 * parent + 2];
+            merkleLeaves[parent] = hash(childLeft, childRight);
         }
         
+        // generalise the above
         else{
-            // if there are 2**k transactions, we increase the index of the root, until we reach its limit
-            if(transactionCount == nextPowerOfTwo){
-                currPowerOfTwo = nextPowerOfTwo;
-                nextPowerOfTwo = 2 * currPowerOfTwo;
-                if(2**depth < 2**treeDepth){
-                    merkleRootIndex = merkleRootIndex / 2;
-                    depth = depth + 1;
-                }
-            }
-            // keep track of the number of layers we need to 'bubble-up'
-            uint256 counter = depth;
             // add the new transaction
             merkleLeaves[2**treeDepth - 1 + offset] = metadata;
             // keep track of parent
-            uint256 parent = (2**treeDepth - 1 + offset) / 2; 
+            uint256 parent = 2**treeDepth - 1 + offset;
             // count down layers, check to see if there are dummy leaves, add new leaves depending on this
-            while(counter > 0) {
+            while(parent >= 1) {
+                parent = (parent - 1) / 2;
                 bytes32 childLeft = merkleLeaves[2 * parent + 1];
                 bytes32 childRight = merkleLeaves[2 * parent + 2];
                 if(childRight == 0x0000000000000000000000000000000000000000000000000000000000000000){
@@ -211,9 +195,23 @@ contract merkleTreeNFT is IzkuNFT {
                 else {
                     merkleLeaves[parent] = hash(childLeft, childRight);
                 }
-                parent = parent / 2;
-                counter--;
             }
+        }
+
+        // each new nft increases offset of base array by one
+        offset++;
+    }
+
+    function getMerkleRootIndex()
+    public view returns(uint256){return merkleRootIndex;}
+
+    // get the current merkle root index
+    function calculateNewRootIndex() 
+        private 
+    {
+        if(transactionCount == powerOfTwo && merkleRootIndex >= 0){
+            powerOfTwo = powerOfTwo * 2;
+            merkleRootIndex = (merkleRootIndex - 1) / 2;
         }
     }
 }
